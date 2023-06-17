@@ -5,6 +5,7 @@ import random
 from collections import defaultdict, OrderedDict, Counter
 import pickle
 import math
+import random
 
 import h5py
 import numpy as np
@@ -65,52 +66,53 @@ class VGDataset(torch.utils.data.Dataset):
         if cfg.DEBUG:
             num_im = 6000
             num_val_im = 600
-        #
-        # num_im = 20000
-        # num_val_im = 1000
+
+        # test code
+        if img_dir == None and dict_file == None and roidb_file == None and image_file == None:
+            img_dir = "/home/public/Datasets/CV/vg_bm/VG_100k"
+            dict_file = "/home/public/Datasets/CV/vg_bm/VG-SGG-dicts-with-attri.json"
+            roidb_file = "/home/public/Datasets/CV/vg_bm/VG-SGG-with-attri.h5"
+            image_file = "/home/public/Datasets/CV/vg_bm/image_data.json"
 
         assert split in {'train', 'val', 'test'}
         self.flip_aug = flip_aug
-        self.split = split
-        self.img_dir = img_dir
-        self.dict_file = dict_file
-        self.roidb_file = roidb_file
-        self.image_file = image_file
+        self.split = split              # {'train', 'val', 'test'} 중 하나
+        self.img_dir = img_dir          # 'datasets/vg/stanford_spilt/VG_100k_images'
+        self.dict_file = dict_file      # 'datasets/vg/VG-SGG-dicts-with-attri.json'
+        self.roidb_file = roidb_file    # 'datasets/vg/VG-SGG-with-attri.h5'
+        self.image_file = image_file    # 'datasets/vg/image_data.json'
         self.filter_non_overlap = filter_non_overlap and self.split == 'train'
         self.filter_duplicate_rels = filter_duplicate_rels and self.split == 'train'
-        self.transforms = transforms
+        self.transforms = transforms    # ColorJitter, Resize, RandomHorizontalFlip, RandomVertical, ToTensor, Normalize
         self.repeat_dict = None
-        self.check_img_file = check_img_file
+        self.check_img_file = check_img_file    # False
         # self.remove_tail_classes = False
-
-
-
         self.ind_to_classes, self.ind_to_predicates, self.ind_to_attributes = load_info(
             dict_file)  # contiguous 151, 51 containing __background__
-
+        # self.ind_to_classes : ['__background__', 'airplane', 'animal', 'arm', ... ]
+        # self.ind_to_predicates : ['__background__', 'above', 'across', 'against', 'along', ... ]
+        # self.ind_to_attributes : ['__background__', 'white', 'black', 'blue', 'green' ... ]
+        
         logger = logging.getLogger("pysgg.dataset")
         self.logger = logger
-
         self.categories = {i: self.ind_to_classes[i]
                            for i in range(len(self.ind_to_classes))}
-                           
+        # self.categories : {0: '__background__', 1: 'airplane', 2: 'animal', 3: 'arm', 4: 'bag', ...}
         self.split_mask, self.gt_boxes, self.gt_classes, self.gt_attributes, self.relationships = load_graphs(
             self.roidb_file, self.split, num_im, num_val_im=num_val_im,
             filter_empty_rels=False if not cfg.MODEL.RELATION_ON and split == "train" else True,
             filter_non_overlap=self.filter_non_overlap,
         )
-
+        # self.split_mask : array([False, False, False, ..., False, False, False]), (108073,)
         self.filenames, self.img_info = load_image_filenames(
             img_dir, image_file, self.check_img_file)  # length equals to split_mask
+        # self.filenames : ['datasets/vg/stanford...498334.jpg', ...]
+        # len(np.where(self.split_mask)[0]) == 57723
         self.filenames = [self.filenames[i]
                           for i in np.where(self.split_mask)[0]]
         self.img_info = [self.img_info[i] for i in np.where(self.split_mask)[0]]
-        self.idx_list = list(range(len(self.filenames)))
-
-        self.id_to_img_map = {k: v for k, v in enumerate(self.idx_list)}
-
-
-
+        self.idx_list = list(range(len(self.filenames)))    # len : 57723
+        self.id_to_img_map = {k: v for k, v in enumerate(self.idx_list)}    # {0: 0, 1: 1, ...}
         self.pre_compute_bbox = None
         if cfg.DATASETS.LOAD_PRECOMPUTE_DETECTION_BOX:
             """precoompute boxes format:
@@ -120,11 +122,9 @@ class VGDataset(torch.utils.data.Dataset):
                 self.pre_compute_bbox = pickle.load(f)
             self.logger.info("load pre-compute box length %d" %
                              (len(self.pre_compute_bbox.keys())))
-
         if cfg.MODEL.ROI_RELATION_HEAD.DATA_RESAMPLING and self.split == 'train':
             self.resampling_method = cfg.MODEL.ROI_RELATION_HEAD.DATA_RESAMPLING_METHOD
             assert self.resampling_method in ['bilvl', 'lvis']
-
             self.global_rf = cfg.MODEL.ROI_RELATION_HEAD.DATA_RESAMPLING_PARAM.REPEAT_FACTOR
             self.drop_rate = cfg.MODEL.ROI_RELATION_HEAD.DATA_RESAMPLING_PARAM.INSTANCE_DROP_RATE
             # creat repeat dict in main process, other process just wait and load
@@ -133,16 +133,14 @@ class VGDataset(torch.utils.data.Dataset):
                 self.repeat_dict = repeat_dict
                 with open(os.path.join(cfg.OUTPUT_DIR, "repeat_dict.pkl"), "wb") as f:
                     pickle.dump(self.repeat_dict, f)
-
             synchronize()
             self.repeat_dict = resampling_dict_generation(self, self.ind_to_predicates, logger)
-
             duplicate_idx_list = []
             for idx in range(len(self.filenames)):
                 r_c = self.repeat_dict[idx]
                 duplicate_idx_list.extend([idx for _ in range(r_c)])
             self.idx_list = duplicate_idx_list
-
+            
         # if cfg.MODEL.ROI_RELATION_HEAD.REMOVE_TAIL_CLASSES and self.split == 'train':
         #     self.remove_tail_classes = True
 
@@ -159,6 +157,7 @@ class VGDataset(torch.utils.data.Dataset):
                   ' ', str(self.img_info[index]['height']), ' ', '=' * 20)
 
         target = self.get_groundtruth(index, flip_img=False)
+        
         # todo add pre-compute boxes
         pre_compute_boxlist = None
         if self.pre_compute_bbox is not None:
@@ -187,8 +186,9 @@ class VGDataset(torch.utils.data.Dataset):
                 target = (target, pre_compute_boxlist)
             else:
                 img, target = self.transforms(img, target)
-
+            
         return img, target, index
+
 
     def get_statistics(self):
         fg_matrix, bg_matrix, rel_counter_init = get_VG_statistics(self,

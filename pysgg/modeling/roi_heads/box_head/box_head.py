@@ -71,7 +71,7 @@ class ROIBoxHead(torch.nn.Module):
         ###################################################################
         # box head specifically for relation prediction model
         ###################################################################
-        if self.cfg.MODEL.RELATION_ON:
+        if self.cfg.MODEL.RELATION_ON: # true
             if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
                 # use ground truth box as proposals
                 proposals = [target.copy_with_fields(["labels", "attributes"]) for target in targets]
@@ -79,13 +79,13 @@ class ROIBoxHead(torch.nn.Module):
                 if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
                     # mode==predcls
                     # return gt proposals and no loss even during training
-                    return x, proposals, {}
+                    return x, proposals, {} # gt_box를 써서 loss가 없음
                 else:
                     # mode==sgcls
                     # add field:class_logits into gt proposals, note field:labels is still gt
                     class_logits, _ = self.predictor(x)
                     proposals = add_predict_info(proposals, class_logits)
-                    return x, proposals, {}
+                    return x, proposals, {} # gt_box를 써서 loss가 없음
             else:
                 # mode==sgdet
                 # add the instance labels for the following instances classification on refined features
@@ -93,7 +93,12 @@ class ROIBoxHead(torch.nn.Module):
                     assert targets is not None
                     proposals = self.samp_processor.assign_label_to_proposals(proposals, targets)
                 x = self.feature_extractor(features, proposals)
+                # x.shape : torch.Size([6077, 4096])
+                
+                # class에 대한 확률과 bounding box regressor
                 class_logits, box_regression = self.predictor(x)
+                # class_logits.shape : torch.Size([6077, 151])
+                # box_regression.shape : torch.Size([6077, 604])
                 proposals = add_predict_logits(proposals, class_logits)
                 # post process:
                 # filter proposals using nms, keep original bbox, add a field 'boxes_per_cls' of size (#nms, #cls, 4)

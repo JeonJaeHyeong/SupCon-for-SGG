@@ -36,6 +36,7 @@ class BoxList(object):
         self.mode = mode
         self.extra_fields = {}
         self.triplet_extra_fields = []  # e.g. relation field, which is not the same size as object bboxes and should not respond to __getitem__ slicing v[item]
+        
 
     def add_field(self, field, field_data, is_triplet=False):
         # if field in self.extra_fields:

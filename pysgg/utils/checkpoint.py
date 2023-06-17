@@ -52,7 +52,7 @@ class Checkpointer(object):
         self.tag_last_checkpoint(save_file)
 
     def load(self, f=None, with_optim=True, update_schedule=False, load_mapping={}):
-        if not f:
+        if not f: # False
             if self.has_checkpoint():
                 # override argument with existing checkpoint
                 self.logger.info("Override argument with existing checkpoint")
@@ -62,9 +62,9 @@ class Checkpointer(object):
                 self.logger.info("No checkpoint found. Initializing model from scratch")
                 return {}
         self.logger.info("Loading parameters from {}".format(f))
-        checkpoint = self._load_file(f)
+        checkpoint = self._load_file(f) # dict_keys(['model', 'optimizer', 'scheduler', 'iteration'])
         self._load_model(checkpoint, load_mapping)
-        if with_optim:
+        if with_optim: # False
             if "optimizer" in checkpoint and self.optimizer:
                 self.logger.info("Loading optimizer from {}".format(f))
                 self.optimizer.load_state_dict(checkpoint.pop("optimizer"))

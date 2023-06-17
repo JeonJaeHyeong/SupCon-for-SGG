@@ -26,7 +26,8 @@ class GeneralizedRCNN(nn.Module):
     def __init__(self, cfg):
         super(GeneralizedRCNN, self).__init__()
         self.cfg = cfg.clone()
-        self.backbone = build_backbone(cfg)
+
+        self.backbone = build_backbone(cfg) # Sequential(ResNet + FPN), FPN으로 인해 5가지 scale의 feature 나옴
         self.rpn = build_rpn(cfg, self.backbone.out_channels)
         self.roi_heads = build_roi_heads(cfg, self.backbone.out_channels)
 
@@ -43,11 +44,25 @@ class GeneralizedRCNN(nn.Module):
                 like `scores`, `labels` and `mask` (for Mask R-CNN models).
 
         """
+        # targets : [BoxList(num_boxes=14...mode=xyxy), BoxList(num_boxes=9,...mode=xyxy), ...]
+        
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
-        images = to_image_list(images)
-        features = self.backbone(images.tensors)
+        images = to_image_list(images) # images.tensors.shape : torch.Size([6, 3, 608, 1024])
+        
+        features = self.backbone(images.tensors) # len(features) : 5
+        # features[0].shape : torch.Size([6, 256, 152, 256])
+        # features[1].shape : torch.Size([6, 256, 76, 128])
+        # features[2].shape : torch.Size([6, 256, 38, 64])
+        # features[3].shape : torch.Size([6, 256, 19, 32])
+        # features[4].shape : ttorch.Size([6, 256, 10, 16])
+        
         proposals, proposal_losses = self.rpn(images, features, targets)
+        # self.rpn : RPNModule
+        # proposals : [BoxList(num_boxes=10...mode=xyxy), BoxList(num_boxes=10...mode=xyxy), ... ], len(6)
+        # proposal_losses : {'loss_objectness': tensor(0.0537, device='cuda:0'), 'loss_rpn_box_reg': tensor(0.0513, device='cuda:0')}
+        
+        # self.roi_heads : CombinedROIHeads(ROIBoxHead, ROIRelationHead)
         if self.roi_heads:
             x, result, detector_losses = self.roi_heads(features, proposals, targets, logger)
         else:
@@ -56,6 +71,12 @@ class GeneralizedRCNN(nn.Module):
             result = proposals
             detector_losses = {}
 
+        # x.shape : torch.Size([480, 4096])
+        # result.shape : [BoxList(num_boxes=80...mode=xyxy), BoxList(num_boxes=80...mode=xyxy), ... ], len(6)
+        # detector_losses : {'loss_rel': tensor(0.1473, devic...Backward>), 
+        #                    'pre_rel_classify_loss_iter-0': tensor(0.2806, devic...ackward0>), 
+        #                    'pre_rel_classify_loss_iter-1': tensor(0.2384, devic...ackward0>), 
+        #                    'pre_rel_classify_loss_iter-2': tensor(0.2435, devic...ackward0>)}
         if self.training:
             losses = {}
             losses.update(detector_losses)

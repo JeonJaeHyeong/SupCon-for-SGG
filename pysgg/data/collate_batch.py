@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 from pysgg.structures.image_list import to_image_list
+from pysgg.config import cfg
 
 
 class BatchCollator(object):
@@ -18,6 +19,26 @@ class BatchCollator(object):
         targets = transposed_batch[1]
         img_ids = transposed_batch[2]
         return images, targets, img_ids
+
+
+class BatchContrastiveCollator(object):
+    """
+    From a list of samples from the dataset,
+    returns the batched images and targets.
+    This should be passed to the DataLoader
+    """
+
+    def __init__(self, size_divisible=0):
+        self.size_divisible = size_divisible
+
+    def __call__(self, batch):
+        transposed_batch = list(zip(*batch))   
+        #positives = list(transposed_batch[0])
+        #negatives = list(transposed_batch[1])
+        oris = list(transposed_batch[0])
+        poses = list(transposed_batch[1])
+        negs = list(transposed_batch[2])
+        return oris, poses, negs # positives, negatives #oris, poses, negs
 
 
 class BBoxAugCollator(object):

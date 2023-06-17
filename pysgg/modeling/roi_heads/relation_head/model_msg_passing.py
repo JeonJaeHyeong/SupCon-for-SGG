@@ -118,10 +118,10 @@ class PairwiseFeatureExtractor(nn.Module):
         self.cfg = config
         statistics = get_dataset_statistics(config)
         obj_classes, rel_classes = statistics['obj_classes'], statistics['rel_classes']
-        self.num_obj_classes = len(obj_classes)
-        self.num_rel_classes = len(rel_classes)
-        self.obj_classes = obj_classes
-        self.rel_classes = rel_classes
+        self.num_obj_classes = len(obj_classes) # 151
+        self.num_rel_classes = len(rel_classes) # 51
+        self.obj_classes = obj_classes # list ['__background__', 'airplane', ... ,  'pole'] 
+        self.rel_classes = rel_classes # list ['__background__', 'above', ... ,  'with'] 
 
         # mode
         if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
@@ -136,16 +136,17 @@ class PairwiseFeatureExtractor(nn.Module):
         # word embedding
         # add language prior representation according to the prediction distribution
         # of objects
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        self.obj_dim = in_channels
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM # 200
+        self.obj_dim = in_channels # 4096
+        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM # 512
+        self.pooling_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM # 2048
 
-        self.word_embed_feats_on = self.cfg.MODEL.ROI_RELATION_HEAD.WORD_EMBEDDING_FEATURES
+        self.word_embed_feats_on = self.cfg.MODEL.ROI_RELATION_HEAD.WORD_EMBEDDING_FEATURES # true
         if self.word_embed_feats_on:
-            obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
-            self.obj_embed_on_prob_dist = nn.Embedding(self.num_obj_classes, self.embed_dim)
-            self.obj_embed_on_pred_label = nn.Embedding(self.num_obj_classes, self.embed_dim)
+            # object에 대응하는 glove word embedding vector
+            obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim) # tensor size [151, 200]
+            self.obj_embed_on_prob_dist = nn.Embedding(self.num_obj_classes, self.embed_dim) # Embedding(151, 200)
+            self.obj_embed_on_pred_label = nn.Embedding(self.num_obj_classes, self.embed_dim) # Embedding(151, 200)
             with torch.no_grad():
                 self.obj_embed_on_prob_dist.weight.copy_(obj_embed_vecs, non_blocking=True)
                 self.obj_embed_on_pred_label.weight.copy_(obj_embed_vecs, non_blocking=True)
@@ -153,52 +154,52 @@ class PairwiseFeatureExtractor(nn.Module):
             self.embed_dim = 0
 
         # features augmentation for rel pairwise features
-        self.rel_feature_type = config.MODEL.ROI_RELATION_HEAD.EDGE_FEATURES_REPRESENTATION
+        self.rel_feature_type = config.MODEL.ROI_RELATION_HEAD.EDGE_FEATURES_REPRESENTATION # fusion
 
         # the input dimension is ROI head MLP, but the inner module is pooling dim, so we need
         # to decrease the dimension first.
-        if self.pooling_dim != in_channels:
+        if self.pooling_dim != in_channels:  # 2048 != 4096
             self.rel_feat_dim_not_match = True
-            self.rel_feature_up_dim = make_fc(in_channels, self.pooling_dim)
+            self.rel_feature_up_dim = make_fc(in_channels, self.pooling_dim) # Linear(4096, 2048)
             layer_init(self.rel_feature_up_dim, xavier=True)
         else:
             self.rel_feat_dim_not_match = False
 
         self.pairwise_obj_feat_updim_fc = make_fc(self.hidden_dim + self.obj_dim + self.embed_dim,
-                                                  self.hidden_dim * 2)
+                                                  self.hidden_dim * 2) # Linear(4808, 1024)
 
-        self.outdim = self.pooling_dim
+        self.outdim = self.pooling_dim # 2048
         # position embedding
         # encode the geometry information of bbox in relationships
         self.geometry_feat_dim = 128
         self.pos_embed = nn.Sequential(*[
             make_fc(9, 32), nn.BatchNorm1d(32, momentum=0.001),
             make_fc(32, self.geometry_feat_dim), nn.ReLU(inplace=True),
-        ])
+        ]) # Sequntial(9, 128)
 
-        if self.rel_feature_type in ["obj_pair", "fusion"]:
-            self.spatial_for_vision = config.MODEL.ROI_RELATION_HEAD.CAUSAL.SPATIAL_FOR_VISION
+        if self.rel_feature_type in ["obj_pair", "fusion"]: # fusion 
+            self.spatial_for_vision = config.MODEL.ROI_RELATION_HEAD.CAUSAL.SPATIAL_FOR_VISION # true
             if self.spatial_for_vision:
                 self.spt_emb = nn.Sequential(*[make_fc(32, self.hidden_dim),
                                                nn.ReLU(inplace=True),
                                                make_fc(self.hidden_dim, self.hidden_dim * 2),
                                                nn.ReLU(inplace=True)
-                                               ])
+                                               ]) # Sequential(32, 1024)
                 layer_init(self.spt_emb[0], xavier=True)
                 layer_init(self.spt_emb[2], xavier=True)
 
             self.pairwise_rel_feat_finalize_fc = nn.Sequential(
                 make_fc(self.hidden_dim * 2, self.pooling_dim),
                 nn.ReLU(inplace=True),
-            )
+            ) # Sequential(1024, 2048)
 
         # map bidirectional hidden states of dimension self.hidden_dim*2 to self.hidden_dim
-        self.obj_hidden_linear = make_fc(self.obj_dim + self.embed_dim + self.geometry_feat_dim, self.hidden_dim)
+        self.obj_hidden_linear = make_fc(self.obj_dim + self.embed_dim + self.geometry_feat_dim, self.hidden_dim) # Linear(4424, 512)
 
         self.obj_feat_aug_finalize_fc = nn.Sequential(
             make_fc(self.hidden_dim + self.obj_dim + self.embed_dim, self.pooling_dim),
             nn.ReLU(inplace=True),
-        )
+        ) # Sequential(4808, 2058)
 
         # untreated average features
 
@@ -261,6 +262,8 @@ class PairwiseFeatureExtractor(nn.Module):
                 obj_embed_by_pred_dist = self.obj_embed_on_prob_dist(obj_labels.long())
             else:
                 obj_logits = cat([proposal.get_field("predict_logits") for proposal in inst_proposals], dim=0).detach()
+                print("obj_logits.shape : ", obj_logits.shape) #  torch.Size([480, 151])
+                print("self.obj_embed_on_prob_dist.weight : ", self.obj_embed_on_prob_dist.weight.shape) # torch.Size([151, 200])
                 obj_embed_by_pred_dist = F.softmax(obj_logits, dim=1) @ self.obj_embed_on_prob_dist.weight
 
         # box positive geometry embedding

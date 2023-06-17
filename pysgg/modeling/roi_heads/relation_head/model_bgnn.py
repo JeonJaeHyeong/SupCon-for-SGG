@@ -254,7 +254,7 @@ class BGNNContext(nn.Module):
     def __init__(
         self,
         cfg,
-        in_channels,
+        in_channels, # 4096
         hidden_dim=1024,
         num_iter=2,
         dropout=False,
@@ -263,25 +263,25 @@ class BGNNContext(nn.Module):
     ):
         super(BGNNContext, self).__init__()
         self.cfg = cfg
-        self.hidden_dim = hidden_dim
-        self.update_step = num_iter
+        self.hidden_dim = hidden_dim # 512
+        self.update_step = num_iter #3
 
         if self.update_step < 1:
             print(
                 "WARNING: the update_step should be greater than 0, current: ",
                 +self.update_step,
             )
-        self.pairwise_feature_extractor = PairwiseFeatureExtractor(cfg, in_channels)
-        self.pooling_dim = self.pairwise_feature_extractor.pooling_dim
+        self.pairwise_feature_extractor = PairwiseFeatureExtractor(cfg, in_channels) # 4096(in_channel)->2048(pooling dim)
+        self.pooling_dim = self.pairwise_feature_extractor.pooling_dim # 2048
 
         self.rel_aware_on = (
-            self.cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.RELATION_CONFIDENCE_AWARE
+            self.cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.RELATION_CONFIDENCE_AWARE # true
         )
         self.rel_aware_module_type = (
-            self.cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.METHOD
+            self.cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.METHOD # RelAwareRelFeature
         )
 
-        self.num_rel_cls = self.cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.num_rel_cls = self.cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES # 51
 
         self.relness_weighting_mp = False
         self.gating_with_relness_logits = False
@@ -292,27 +292,27 @@ class BGNNContext(nn.Module):
         self.mp_pair_refine_iter = 1
 
         self.graph_filtering_method = (
-            cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.METHOD
+            cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.METHOD # 51
         )
 
-        self.vail_pair_num = cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.MP_VALID_PAIRS_NUM
+        self.vail_pair_num = cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.MP_VALID_PAIRS_NUM # 128
 
-        if self.rel_aware_on:
+        if self.rel_aware_on: # True
 
             #####  build up the relationship aware modules
             self.mp_pair_refine_iter = (
-                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.ITERATE_MP_PAIR_REFINE
+                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.ITERATE_MP_PAIR_REFINE # 3
             )
             assert self.mp_pair_refine_iter > 0
 
             self.shared_pre_rel_classifier = (
-                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.SHARE_RELATED_MODEL_ACROSS_REFINE_ITER
+                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.SHARE_RELATED_MODEL_ACROSS_REFINE_ITER # false
             )
 
             if self.mp_pair_refine_iter <= 1:
                 self.shared_pre_rel_classifier = False
 
-            if not self.shared_pre_rel_classifier:
+            if not self.shared_pre_rel_classifier: # False라 진행됨, mp_pair_refine_iter만큼 confidence_aware_module 쌓음
                 self.relation_conf_aware_models = nn.ModuleList()
                 for ii in range(self.mp_pair_refine_iter):
 
@@ -334,17 +334,18 @@ class BGNNContext(nn.Module):
 
             ######  relationship confidence recalibration
 
-            self.apply_gt_for_rel_conf = self.cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.APPLY_GT
+            self.apply_gt_for_rel_conf = self.cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.APPLY_GT # false
 
             self.gating_with_relness_logits = (
-                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.GATING_WITH_RELNESS_LOGITS
+                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.GATING_WITH_RELNESS_LOGITS # false
             )
             self.relness_weighting_mp = (
-                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.RELNESS_MP_WEIGHTING
+                cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.RELNESS_MP_WEIGHTING # true
             )
             # 'minmax',  'learnable_scaling'
             self.relness_score_recalibration_method = (
                 cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.RELNESS_MP_WEIGHTING_SCORE_RECALIBRATION_METHOD
+                # learnable_scaling
             )
 
             if self.relness_score_recalibration_method == "learnable_scaling":
@@ -382,17 +383,17 @@ class BGNNContext(nn.Module):
         self.obj_downdim_fc = nn.Sequential(
             make_fc(self.pooling_dim, self.hidden_dim),
             nn.ReLU(True),
-        )
+        ) # Sequential(2048, 512)
         self.rel_downdim_fc = nn.Sequential(
             make_fc(self.pooling_dim, self.hidden_dim),
             nn.ReLU(True),
-        )
+        ) # Sequential(2048, 512)
 
         self.obj_pair2rel_fuse = nn.Sequential(
             nn.BatchNorm1d(self.hidden_dim * 2),
             make_fc(self.hidden_dim * 2, self.hidden_dim),
             nn.ReLU(),
-        )
+        ) # Sequential(1024, 512)
 
         self.padding_feature = nn.Parameter(
             torch.zeros((self.hidden_dim)), requires_grad=False
@@ -406,23 +407,23 @@ class BGNNContext(nn.Module):
             cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.SHARE_PARAMETERS_EACH_ITER
         )
 
-        param_set_num = num_iter
-        if self.share_parameters_each_iter:
+        param_set_num = num_iter # 3
+        if self.share_parameters_each_iter: # false
             param_set_num = 1
         self.gate_sub2pred = nn.Sequential(
-            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)]
+            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)] # messagePAssingUnit_v1 * 3
         )
         self.gate_obj2pred = nn.Sequential(
-            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)]
+            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)] # messagePAssingUnit_v1 * 3
         )
         self.gate_pred2sub = nn.Sequential(
-            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)]
+            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)] # messagePAssingUnit_v1 * 3
         )
         self.gate_pred2obj = nn.Sequential(
-            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)]
+            *[MessagePassingUnit(self.hidden_dim, gate_width) for _ in range(param_set_num)] # messagePAssingUnit_v1 * 3
         )
 
-        if self.gating_with_relness_logits:
+        if self.gating_with_relness_logits: # false
             MessagePassingUnit = MessagePassingUnitGatingWithRelnessLogits
             self.gate_pred2sub = nn.Sequential(
                 *[
@@ -442,13 +443,13 @@ class BGNNContext(nn.Module):
             )
         self.object_msg_fusion = nn.Sequential(
             *[MessageFusion(self.hidden_dim, dropout) for _ in range(param_set_num)]
-        )  #
+        ) # messageFusion * 3
         self.pred_msg_fusion = nn.Sequential(
             *[MessageFusion(self.hidden_dim, dropout) for _ in range(param_set_num)]
-        )
+        ) # messageFusion * 3
 
         self.output_skip_connection = (
-            cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.SKIP_CONNECTION_ON_OUTPUT
+            cfg.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.SKIP_CONNECTION_ON_OUTPUT # false
         )
 
         self.forward_time = 0
@@ -770,8 +771,8 @@ class BGNNContext(nn.Module):
 
     def forward(
         self,
-        inst_features,
-        rel_union_features,
+        inst_features,      # roi_features
+        rel_union_features, # union_feature
         proposals,
         rel_pair_inds,
         rel_gt_binarys=None,
@@ -789,39 +790,47 @@ class BGNNContext(nn.Module):
 
         num_inst_proposals = [len(b) for b in proposals]
 
+        # inst_features.shape : torch.Size([480, 4096])
+        # rel_union_features.shape : torch.Size([1101, 4096])
+        # proposals : [BoxList(num_boxes=80...mode=xyxy), BoxList(num_boxes=80...mode=xyxy), .. ], len(6)
+        # rel_pair_inds : len(6), rel_pair_inds[0].shape : torch.Size([156, 2]), rel_pair_inds[1].shape : torch.Size([182, 2])
         augment_obj_feat, rel_feats = self.pairwise_feature_extractor(
             inst_features,
             rel_union_features,
             proposals,
             rel_pair_inds,
         )
+        # augment_obj_feat.shape : torch.Size([480, 2048])
+        # rel_feats.shape : torch.Size([1101, 2048])
 
         relatedness_each_iters = []
         refine_rel_feats_each_iters = [rel_feats]
         refine_ent_feats_each_iters = [augment_obj_feat]
         pre_cls_logits_each_iter = []
 
+        # self.mp_pair_refine_iter : 3
         for refine_iter in range(self.mp_pair_refine_iter):
             pre_cls_logits = None
 
             pred_relatedness_scores = None
-            if self.rel_aware_on:
-                # input_features = refine_ent_feats_each_iters[-1]
+            if self.rel_aware_on:   # True
 
                 input_features = refine_rel_feats_each_iters[-1]
-                if not self.shared_pre_rel_classifier:
+                # input_features.shape : torch.Size([1101, 2048])
+                if not self.shared_pre_rel_classifier: # not False = True
                     pre_cls_logits, pred_relatedness_scores = self.relation_conf_aware_models[
                         refine_iter
-                    ](input_features, proposals, rel_pair_inds)
+                    ](input_features, proposals, rel_pair_inds) 
+                    # pre_cls_logits.shape : torch.Size([1101, 51])
+                    # pred_relatedness_scores[0].shape : [80, 80], len(6)
                 else:
                     pre_cls_logits, pred_relatedness_scores = self.relation_conf_aware_models(
                         input_features, proposals, rel_pair_inds
                     )
                 pre_cls_logits_each_iter.append(pre_cls_logits)
-            relatedness_scores = pred_relatedness_scores
-
+            relatedness_scores = pred_relatedness_scores # len(6), pred_relatedness_scores[0].shape : torch.Size([80, 80])
             # apply GT
-            if self.apply_gt_for_rel_conf:
+            if self.apply_gt_for_rel_conf: # False
                 ref_relatedness = rel_gt_binarys.clone()
 
                 if pred_relatedness_scores is None:
@@ -831,19 +840,18 @@ class BGNNContext(nn.Module):
                     for idx, ref_rel in enumerate(ref_relatedness):
                         gt_rel_idx = ref_rel.nonzero()
                         relatedness_scores[idx][gt_rel_idx[:, 0], gt_rel_idx[:, 1]] = 1.0
-
-            relatedness_each_iters.append(relatedness_scores)
+            relatedness_each_iters.append(relatedness_scores) # 3개가 쌓임
 
             # build up list for massage passing process
             inst_feature4iter = [
                 self.obj_downdim_fc(augment_obj_feat),
-            ]
+            ] # [].shape : torch.Size([480, 512])
             rel_feature4iter = [
                 self.rel_downdim_fc(rel_feats),
-            ]
+            ] # [0].shape : torch.Size([1101, 512])
 
             valid_inst_idx = []
-            if self.filter_the_mp_instance:
+            if self.filter_the_mp_instance: # True
                 for p in proposals:
                     valid_inst_idx.append(p.get_field("pred_scores") > 0.03)
 
@@ -854,10 +862,10 @@ class BGNNContext(nn.Module):
 
             self.forward_time += 1
 
-            if self.pretrain_pre_clser_mode:
+            if self.pretrain_pre_clser_mode: # True
                 #  directly return without graph building
-                refined_inst_features = inst_feature4iter[-1]
-                refined_rel_features = rel_feature4iter[-1]
+                refined_inst_features = inst_feature4iter[-1] # refined_inst_features.shape : torch.Size([480, 512])
+                refined_rel_features = rel_feature4iter[-1] # refined_rel_features.shape : torch.Size([1101, 512])
 
                 refine_ent_feats_each_iters.append(refined_inst_features)
                 refine_rel_feats_each_iters.append(refined_rel_features)
@@ -898,7 +906,7 @@ class BGNNContext(nn.Module):
                     continue
 
             # graph module
-            for t in range(self.update_step):
+            for t in range(self.update_step): # 3
                 param_idx = 0
                 if not self.share_parameters_each_iter:
                     param_idx = t
@@ -1002,9 +1010,10 @@ class BGNNContext(nn.Module):
 
         if (
             len(relatedness_each_iters) > 0 and not self.training
-        ):  # todo why disabled in training??
+        ):  # todo why disabled in training??            
+            
             relatedness_each_iters = torch.stack(
-                [torch.stack(each) for each in relatedness_each_iters]
+                [torch.stack(each) for each in relatedness_each_iters] # torch.stack(each)
             )
             # bsz, num_obj, num_obj, iter_num
             relatedness_each_iters = relatedness_each_iters.permute(1, 2, 3, 0)
@@ -1015,9 +1024,9 @@ class BGNNContext(nn.Module):
             pre_cls_logits_each_iter = None
 
         return (
-            refine_ent_feats_each_iters[-1],
-            refine_rel_feats_each_iters[-1],
-            pre_cls_logits_each_iter,
+            refine_ent_feats_each_iters[-1], # torch.Size([480, 512])
+            refine_rel_feats_each_iters[-1], # torch.Size([1101, 512])
+            pre_cls_logits_each_iter, # len(3), pre_cls_logits_each_iter[0].shape : [1101, 51]
             relatedness_each_iters,
         )
 

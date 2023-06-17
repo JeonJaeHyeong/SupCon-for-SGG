@@ -3,7 +3,9 @@
 # NOTE: this should be the first import (no not reorder)
 import argparse
 import os
-
+import sys
+sys.path.append(os.getcwd())
+#os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 import gpustat
 import torch
 
@@ -40,7 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description="PyTorch Object Detection Inference")
     parser.add_argument(
         "--config-file",
-        default="/private/home/fmassa/github/detectron.pytorch_v2/configs/e2e_faster_rcnn_R_50_C4_1x_caffe2.yaml",
+        default="checkpoints/predcls-BGNNPredictor/(2023-06-11_15_57)Contrastive_learning(resampling)/config.yml",
         metavar="FILE",
         help="path to config file",
     )

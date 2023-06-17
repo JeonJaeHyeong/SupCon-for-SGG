@@ -9,6 +9,8 @@ Basic training script for PyTorch
 import argparse
 import datetime
 import os
+import sys
+sys.path.append(os.getcwd())
 import random
 import time
 import threading
@@ -44,15 +46,15 @@ except ImportError:
 
 SEED = 666
 
-torch.cuda.manual_seed(SEED)  # 为当前GPU设置随机种子
-torch.cuda.manual_seed_all(SEED)  # 为所有GPU设置随机种子
+torch.cuda.manual_seed(SEED)  # 현재 GPU에 대한 임의 시드 설정
+torch.cuda.manual_seed_all(SEED)  # 모든 GPU에 대해 임의 시드 설정
 torch.manual_seed(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
 
-torch.backends.cudnn.enabled = True  # 默认值
-torch.backends.cudnn.benchmark = True  # 默认为False
-torch.backends.cudnn.deterministic = True  # 默认为False;benchmark为True时,y要排除随机性必须为True
+torch.backends.cudnn.enabled = True  # 기본값
+torch.backends.cudnn.benchmark = True  # 기본값은 False
+torch.backends.cudnn.deterministic = True  # 기본값은 False. 벤치마크가 True일 때 임의성을 제외하려면 y가 True여야 합니다.
 
 
 torch.autograd.set_detect_anomaly(True)
@@ -293,7 +295,7 @@ def train(
         except_weight_decay=except_weight_decay,
     )
     scheduler = make_lr_scheduler(cfg, optimizer, logger)
-    debug_print(logger, "end optimizer and shcedule")
+    debug_print(logger, "end optimizer and schedule")
     # Initialize mixed-precision training
     use_mixed_precision = cfg.DTYPE == "float16"
     amp_opt_level = "O1" if use_mixed_precision else "O0"
@@ -334,7 +336,7 @@ def train(
         )
     debug_print(logger, "end distributed")
 
-    if cfg.SOLVER.PRE_VAL:
+    if cfg.SOLVER.PRE_VAL: # False
         logger.info("Validate before training")
         run_val(cfg, model, val_data_loaders, distributed, logger)
 
@@ -366,7 +368,16 @@ def train(
 
     print_first_grad = True
     for iteration, (images, targets, _) in enumerate(train_data_loader, start_iter):
-        if any(len(target) < 1 for target in targets):
+        # images : pysgg.structures.image_list.ImageList object 
+        # images.tensors.shape : torch.Size([6, 3, 608, 1024])
+        # targets : (BoxList(num_boxes=14...mode=xyxy), BoxList(num_boxes=9,...mode=xyxy), ...)
+        # 이때의 6은 config의 img_per_batch가 6이라 그럼
+        # images.tensors[0] => [3, 608, 1024] 가 나옴. 이미지가 높이 608 x 너비 1024라는 건데 여기 608 x 1024는 zero padding까지 포함된거임
+        # 실제 actual image만 보기위해서는 BoxList에 image_width, image_height가 있는데 여기는 width = 1000, height = 472이다.
+        # 그래서 0번째 image의 실제 이미지는 images.tensors[0][:, :472, :1000]
+        
+        # images가 6개의 tensor가 있으면 targets도 6개가 있음, 각각이 이미지와 target(이미지안의 bounding box들에 대한 정보) 
+        if any(len(target) < 1 for target in targets): # len(target) = num_boxes
             logger.error(
                 f"Iteration={iteration + 1} || Image Ids used for training {_} || targets Length={[len(target) for target in targets]}"
             )
@@ -381,12 +392,18 @@ def train(
         targets = [target.to(device) for target in targets]
 
         loss_dict = model(images, targets, logger=logger)
+        # loss_dict : 'loss_rel': tensor(0.2078, devic...Backward>), 
+        #             'pre_rel_classify_loss_iter-0': tensor(1.1105, devic...ackward0>), 
+        #             'pre_rel_classify_loss_iter-1': tensor(0.5408, devic...ackward0>), 
+        #             'pre_rel_classify_loss_iter-2': tensor(0.6627, devic...ackward0>)}
 
         losses = sum(loss for loss in loss_dict.values())
+        # losses : tensor(2.3199)
 
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = reduce_loss_dict(loss_dict)
         losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+        # losses_reduced : tensor(2.3199)
 
         meters.update(loss=losses_reduced, **loss_dict_reduced)
         optimizer.zero_grad()
@@ -626,7 +643,7 @@ def main():
     parser = argparse.ArgumentParser(description="PyTorch Relation Detection Training")
     parser.add_argument(
         "--config-file",
-        default="",
+        default="configs/e2e_relBGNN_vg.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
@@ -692,9 +709,12 @@ def main():
     #     logger.info("\n" + collect_env_info())
 
     logger.info("Loaded configuration file {}".format(args.config_file))
-    with open(args.config_file, "r") as cf:
-        config_str = "\n" + cf.read()
-        logger.info(config_str)
+    
+    ## 중복된 config print
+    #with open(args.config_file, "r") as cf:
+    #    config_str = "\n" + cf.read()
+    #    logger.info(config_str)
+    
     logger.info("Running with config:\n{}".format(cfg))
 
     output_config_path = os.path.join(cfg.OUTPUT_DIR, "config.yml")

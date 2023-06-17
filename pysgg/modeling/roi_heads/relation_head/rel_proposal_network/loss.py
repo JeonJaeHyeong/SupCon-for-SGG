@@ -136,15 +136,15 @@ def loss_eval_hybrid_level(pre_cls_logits, rel_labels, loss):
 class RelAwareLoss(nn.Module):
     def __init__(self, cfg):
         super(RelAwareLoss, self).__init__()
-        alpha = cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.FOCAL_LOSS_ALPHA
-        gamma = cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.FOCAL_LOSS_GAMMA
+        alpha = cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.FOCAL_LOSS_ALPHA # 0.2
+        gamma = cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.FOCAL_LOSS_GAMMA # 2.0
 
         self.pre_clser_loss_type = (
-            cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.PRE_CLSER_LOSS
+            cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.PRE_CLSER_LOSS # focal_fgbg_norm
         )
 
         self.predictor_type = (
-            cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.REL_AWARE_PREDICTOR_TYPE
+            cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.REL_AWARE_PREDICTOR_TYPE # hybird
         )
 
         fgbgnorm = False

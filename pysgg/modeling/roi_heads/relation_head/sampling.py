@@ -117,35 +117,35 @@ class RelationSampling(object):
             proposals (list[BoxList])  contain fields: labels, predict_logits
             targets (list[BoxList]) contain fields: labels
         """
-        self.num_pos_per_img = int(self.batch_size_per_image * self.positive_fraction)
+        self.num_pos_per_img = int(self.batch_size_per_image * self.positive_fraction) # 250 = 1000 * 0.25
         rel_idx_pairs = []
         rel_labels = []
         rel_labels_all = []
         rel_sym_binarys = []
         for img_id, (proposal, target) in enumerate(zip(proposals, targets)):
             device = proposal.bbox.device
-            prp_box = proposal.bbox
-            prp_lab = proposal.get_field("labels").long()
-            tgt_box = target.bbox
-            tgt_lab = target.get_field("labels").long()
-            tgt_rel_matrix = target.get_field("relation")  # [tgt, tgt]
+            prp_box = proposal.bbox # prp_box.shape : torch.Size([80, 4]), 80개의 대한 class, 대부분 0이고 background임
+            prp_lab = proposal.get_field("labels").long() # prp_lab.shape : torch.Size([80])
+            tgt_box = target.bbox # tgt_box.shape : torch.Size([9, 4]), 실제 target 9개의 box 위치
+            tgt_lab = target.get_field("labels").long() # tgt_lab.shape : torch.Size([9]), 각 target의 class
+            tgt_rel_matrix = target.get_field("relation")  # [tgt, tgt], torch.Size([9, 9])
 
             # IoU matching for object detection results
-            ious = boxlist_iou(target, proposal)  # [tgt, prp]
-            is_match = (tgt_lab[:, None] == prp_lab[None]) & (ious > self.fg_thres)  # [tgt, prp]
+            ious = boxlist_iou(target, proposal)  # [tgt, prp], ious.shape : torch.Size([9, 80])
+            is_match = (tgt_lab[:, None] == prp_lab[None]) & (ious > self.fg_thres)  # [tgt, prp], is_match.shape : torch.Size([9, 80])
             # one box may match multiple gt boxes here we just mark them as a valid matching if they
             # match any boxes
-            locating_match = (ious > self.fg_thres).nonzero()  # [tgt, prp]
-            locating_match_stat = torch.zeros((len(proposal)), device=device)
+            locating_match = (ious > self.fg_thres).nonzero()  # [tgt, prp], locating_match.shape, torch.Size([22, 2])
+            locating_match_stat = torch.zeros((len(proposal)), device=device) # torch.Size([80])
             locating_match_stat[locating_match[:, 1]] = 1
             proposal.add_field("locating_match", locating_match_stat)
 
             # Proposal self IoU to filter non-overlap
-            prp_self_iou = boxlist_iou(proposal, proposal)  # [prp, prp]
-            if self.require_overlap and (not self.use_gt_box):
+            prp_self_iou = boxlist_iou(proposal, proposal)  # [prp, prp], prp_self_iou.shape : torch.Size([80, 80])
+            if self.require_overlap and (not self.use_gt_box): # False and not (True)
                 rel_possibility = (prp_self_iou > 0) & (prp_self_iou < 1)  # not self & intersect
             else:
-                num_prp = prp_box.shape[0]
+                num_prp = prp_box.shape[0] # 80
                 # [prp, prp] mark the affinity relation between the det prediction
                 rel_possibility = torch.ones((num_prp, num_prp), device=device).long() \
                                   - torch.eye(num_prp, device=device).long()
@@ -156,8 +156,11 @@ class RelationSampling(object):
             img_rel_triplets, corrsp_gt_rel_idx, binary_rel = self.motif_rel_fg_bg_sampling(device, tgt_rel_matrix,
                                                                          ious, is_match, rel_possibility,
                                                                          proposal.get_field('pred_scores'))
+            # img_rel_triplets.shape : torch.Size([72, 3])
+            # corrsp_gt_rel_idx.shape : torch.Size([72])
+            # binary_rel.shape : torch.Size([80, 80])
             
-            if target.has_field("relation_non_masked"):
+            if target.has_field("relation_non_masked"): # True
                 rel_map = target.get_field("relation_non_masked")
                 gt_rel_idx = torch.nonzero(rel_map != 0)
                 fg_gt_rel_pair_idx = gt_rel_idx[corrsp_gt_rel_idx[corrsp_gt_rel_idx >= 0]]
@@ -171,6 +174,7 @@ class RelationSampling(object):
             rel_labels.append(img_rel_triplets[:, 2])  # (num_rel, )
             rel_sym_binarys.append(binary_rel)
 
+        # rel_idx_pairs[0].shape : torch.Size([72, 2]), [0], [1]마다 relation 개수 다름
         if len(rel_labels_all) == 0:
             rel_labels_all = rel_labels
         

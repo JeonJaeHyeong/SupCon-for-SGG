@@ -7,6 +7,14 @@ maskrcnn_benchmark.egg-info/
 pysgg.egg-info/
 build/
 dist/
+checkpoints/
+datasets/
+feature and cluster/
+pysgg.egg-info	
+runs/
+SimCLR/
+SupContrast/
+
 
 # ipython/jupyter notebooks
 #*.ipynb

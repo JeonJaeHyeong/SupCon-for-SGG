@@ -32,8 +32,8 @@ class ROIRelationHead(torch.nn.Module):
         super(ROIRelationHead, self).__init__()
         self.cfg = cfg.clone()
 
-        self.num_obj_cls = cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_rel_cls = cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.num_obj_cls = cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES  # 151
+        self.num_rel_cls = cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES # 51
 
         # mode
         if cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
@@ -72,11 +72,11 @@ class ROIRelationHead(torch.nn.Module):
         self.loss_evaluator = make_roi_relation_loss_evaluator(cfg)
         self.samp_processor = make_roi_relation_samp_processor(cfg)
 
-        self.rel_prop_on = self.cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.SET_ON
-        self.rel_prop_type = self.cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.METHOD
+        self.rel_prop_on = self.cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.SET_ON # true
+        self.rel_prop_type = self.cfg.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.METHOD # RelAwareRelFeature
 
-        self.object_cls_refine = cfg.MODEL.ROI_RELATION_HEAD.OBJECT_CLASSIFICATION_REFINE
-        self.pass_obj_recls_loss = cfg.MODEL.ROI_RELATION_HEAD.REL_OBJ_MULTI_TASK_LOSS
+        self.object_cls_refine = cfg.MODEL.ROI_RELATION_HEAD.OBJECT_CLASSIFICATION_REFINE # false
+        self.pass_obj_recls_loss = cfg.MODEL.ROI_RELATION_HEAD.REL_OBJ_MULTI_TASK_LOSS # false
 
         # parameters
         self.use_union_box = self.cfg.MODEL.ROI_RELATION_HEAD.PREDICT_USE_VISION
@@ -116,11 +116,12 @@ class ROIRelationHead(torch.nn.Module):
             losses (dict[Tensor]): During training, returns the losses for the
                 head. During testing, returns an empty dict.
         """
+        # proposal이 detector로 찾은거고 target이 gt임
 
         if self.training:
             # relation subsamples and assign ground truth label during training
             with torch.no_grad():
-                if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
+                if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX: # sgdet false
                     (
                         proposals,
                         rel_labels,
@@ -142,7 +143,13 @@ class ROIRelationHead(torch.nn.Module):
             rel_pair_idxs = self.samp_processor.prepare_test_pairs(
                 features[0].device, proposals
             )
-
+            
+            
+        # len(proposals) : 6, proposals : [BoxList(num_boxes=80...mode=xyxy), BoxList(num_boxes=80...mode=xyxy), ... ]
+        # len(rel_label) : 6, rel_label : [tensor([-1,  0,  0, ...='cuda:0'), tensor([20, 20, 31, ...='cuda:0'), ... ]
+        # len(rel_label_all) : 6, rel_label_all : [tensor([31,  0,  0, ...='cuda:0'), tensor([20, 20, 31, ...='cuda:0'), .. ]
+        # len(rel_pair_idxs) : 6, rel_pair_idxs : [tensor([[18, 14], ...='cuda:0'), ..., tensor([[ 6, 20], ...='cuda:0')]
+        
         if self.mode == "predcls":
             # overload the pred logits by the gt label
             device = features[0].device
@@ -193,6 +200,7 @@ class ROIRelationHead(torch.nn.Module):
             att_features = self.att_feature_extractor(features, proposals)
             roi_features = torch.cat((roi_features, att_features), dim=-1)
 
+        # 여기부터 training이 되는 부분
         if self.use_union_box:
             union_features = self.union_feature_extractor(features, proposals, rel_pair_idxs)
         else:
@@ -204,7 +212,15 @@ class ROIRelationHead(torch.nn.Module):
         if not self.use_same_label_with_clser:
             rel_pn_labels = rel_labels_all
 
-
+        # proposals : [BoxList(num_boxes=80...mode=xyxy), BoxList(num_boxes=80...mode=xyxy), ... ], len(6)
+        # roi_features.shape : torch.Size([480, 4096])
+        # union_features.shape : torch.Size([1822, 4096])
+        
+        # obj_refine_logits[0].shape : torch.Size([80, 151]), len(6)
+        # relation_logits[0].shape : torch.Size([110, 51]), len(6)
+        # add_losses : {'pre_rel_classify_loss_iter-0': tensor(0.1675, devic...ackward0>), 
+        #               'pre_rel_classify_loss_iter-1': tensor(0.1751, devic...ackward0>), 
+        #               'pre_rel_classify_loss_iter-2': tensor(0.1690, devic...ackward0>)}
         obj_refine_logits, relation_logits, add_losses = self.predictor(
             proposals,
             rel_pair_idxs,
@@ -241,15 +257,26 @@ class ROIRelationHead(torch.nn.Module):
                 loss_refine_att=loss_refine[1],
             )
         else:
-            if self.pass_obj_recls_loss:
+            if self.pass_obj_recls_loss: # False
                 output_losses = dict(loss_rel=loss_relation, loss_refine_obj=loss_refine)
             else:
-                output_losses = dict(loss_rel=loss_relation)
+                output_losses = dict(loss_rel=loss_relation) # loss_relation : tensor(0.2078, device='cuda:0', grad_fn=<NllLossBackward>)
 
-        if rel_pn_loss is not None:
+        if rel_pn_loss is not None: # False
             output_losses["loss_relatedness"] = rel_pn_loss
-
+        # add_losses 
+        # {'pre_rel_classify_loss_iter-0': tensor(1.1105, devic...ackward0>), 
+        # 'pre_rel_classify_loss_iter-1': tensor(0.5408, devic...ackward0>), 
+        # 'pre_rel_classify_loss_iter-2': tensor(0.6627, devic...ackward0>)}
+        # output_loss : {'loss_rel': tensor(0.2078, devic...Backward>)}
+        
         output_losses.update(add_losses)
+        # output_losses
+        # {'loss_rel': tensor(0.2078, devic...Backward>), 
+        # 'pre_rel_classify_loss_iter-0': tensor(1.1105, devic...ackward0>), 
+        # 'pre_rel_classify_loss_iter-1': tensor(0.5408, devic...ackward0>), 
+        # 'pre_rel_classify_loss_iter-2': tensor(0.6627, devic...ackward0>)}
+        
         output_losses_checked = {}
         if self.training:
             for key in output_losses.keys():

@@ -50,13 +50,13 @@ _C.MODEL.PRETRAINED_DETECTOR_CKPT = ""
 # -----------------------------------------------------------------------------
 _C.INPUT = CN()
 # Size of the smallest side of the image during training
-_C.INPUT.MIN_SIZE_TRAIN = (800,)  # (800,)
+_C.INPUT.MIN_SIZE_TRAIN = (600,)  # (800,)
 # Maximum size of the side of the image during training
-_C.INPUT.MAX_SIZE_TRAIN = 1333
+_C.INPUT.MAX_SIZE_TRAIN = 1000
 # Size of the smallest side of the image during testing
-_C.INPUT.MIN_SIZE_TEST = 800
+_C.INPUT.MIN_SIZE_TEST = 600
 # Maximum size of the side of the image during testing
-_C.INPUT.MAX_SIZE_TEST = 1333
+_C.INPUT.MAX_SIZE_TEST = 1000
 # Values to be used for image normalization
 _C.INPUT.PIXEL_MEAN = [102.9801, 115.9465, 122.7717]
 # Values to be used for image normalization
@@ -109,7 +109,7 @@ _C.MODEL.BACKBONE = CN()
 # The string must match a function that is imported in modeling.model_builder
 # (e.g., 'FPN.add_fpn_ResNet101_conv5_body' to specify a ResNet-101-FPN
 # backbone)
-_C.MODEL.BACKBONE.CONV_BODY = "R-50-C4"
+_C.MODEL.BACKBONE.CONV_BODY = "R-101-FPN"
 
 # Add StopGrad at a specified stage so the bottom layers are frozen
 _C.MODEL.BACKBONE.FREEZE_CONV_BODY_AT = 2
@@ -221,7 +221,7 @@ _C.MODEL.ROI_HEADS.NMS_FILTER_DUPLICATES = False
 _C.MODEL.ROI_HEADS.DETECTIONS_PER_IMG = 256
 
 _C.MODEL.ROI_BOX_HEAD = CN()
-_C.MODEL.ROI_BOX_HEAD.FEATURE_EXTRACTOR = "ResNet50Conv5ROIFeatureExtractor"
+_C.MODEL.ROI_BOX_HEAD.FEATURE_EXTRACTOR = "FPN2MLPFeatureExtractor"
 _C.MODEL.ROI_BOX_HEAD.PREDICTOR = "FastRCNNPredictor"
 _C.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION = 14
 _C.MODEL.ROI_BOX_HEAD.POOLER_SAMPLING_RATIO = 0
@@ -237,7 +237,7 @@ _C.MODEL.ROI_BOX_HEAD.CONV_HEAD_DIM = 256
 _C.MODEL.ROI_BOX_HEAD.NUM_STACKED_CONVS = 4
 
 _C.MODEL.ROI_ATTRIBUTE_HEAD = CN()
-_C.MODEL.ROI_ATTRIBUTE_HEAD.FEATURE_EXTRACTOR = "FPN2MLPFeatureExtractor"
+_C.MODEL.ROI_ATTRIBUTE_HEAD.FEATURE_EXTRACTOR = "FPN2MLPFeatureExtractorr"
 _C.MODEL.ROI_ATTRIBUTE_HEAD.PREDICTOR = "FPNPredictor"
 _C.MODEL.ROI_ATTRIBUTE_HEAD.SHARE_BOX_FEATURE_EXTRACTOR = True
 # Add attributes to each box
@@ -250,7 +250,7 @@ _C.MODEL.ROI_ATTRIBUTE_HEAD.ATTRIBUTE_BGFG_RATIO = 3
 _C.MODEL.ROI_ATTRIBUTE_HEAD.POS_WEIGHT = 5.0
 
 _C.MODEL.ROI_MASK_HEAD = CN()
-_C.MODEL.ROI_MASK_HEAD.FEATURE_EXTRACTOR = "ResNet50Conv5ROIFeatureExtractor"
+_C.MODEL.ROI_MASK_HEAD.FEATURE_EXTRACTOR = "FPN2MLPFeatureExtractor"
 _C.MODEL.ROI_MASK_HEAD.PREDICTOR = "MaskRCNNC4Predictor"
 _C.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION = 14
 _C.MODEL.ROI_MASK_HEAD.POOLER_SAMPLING_RATIO = 0
@@ -698,6 +698,35 @@ _C.MODEL.FBNET.MASK_HEAD_STRIDE = 0
 # 0 to use all blocks defined in arch_def
 _C.MODEL.FBNET.RPN_HEAD_BLOCKS = 0
 _C.MODEL.FBNET.RPN_BN_TYPE = ""
+
+
+# ---------------------------------------------------------------------------- #
+# Contrastive learning options
+# ---------------------------------------------------------------------------- #
+_C.MODEL.CONTRASTIVE = CN()
+_C.MODEL.CONTRASTIVE.LEARNING = True
+_C.MODEL.CONTRASTIVE.FINETUNING = False
+_C.MODEL.CONTRASTIVE.IMS_PER_BATCH = 1
+_C.MODEL.CONTRASTIVE.PIXEL_MEAN = [102.9801, 115.9465, 122.7717]
+_C.MODEL.CONTRASTIVE.PIXEL_STD = [1.0, 1.0, 1.0]
+_C.MODEL.CONTRASTIVE.NUM_POS_SAMPLES = 20
+_C.MODEL.CONTRASTIVE.NUM_NEG_SAMPLES = 30
+_C.MODEL.CONTRASTIVE.CLUSTER_NUM = 12
+_C.MODEL.CONTRASTIVE.MAX_REL_NUM = 3
+_C.MODEL.CONTRASTIVE.USE_CLUSTER = True
+_C.MODEL.CONTRASTIVE.USE_OBJECT_INFO = True
+_C.MODEL.CONTRASTIVE.LEARNING_RATE = 0.0003
+_C.MODEL.CONTRASTIVE.WEIGHT_DECAY = 0.0001
+_C.MODEL.CONTRASTIVE.OUT_DIM = 128
+_C.MODEL.CONTRASTIVE.TEMPERATURE = 0.07
+_C.MODEL.CONTRASTIVE.EPOCH = 1
+_C.MODEL.CONTRASTIVE.LOG_EVERY_N_STEPS = 10
+_C.MODEL.CONTRASTIVE.CHECKPOINT_PERIOD = 100
+_C.MODEL.CONTRASTIVE.PRETRAINED_MODEL = "checkpoints/contrastive learning/relation/model_0003300.pth" 
+
+
+
+
 
 # ---------------------------------------------------------------------------- #
 # Solver

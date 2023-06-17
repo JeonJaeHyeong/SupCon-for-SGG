@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 from . import transforms as T
+from torchvision import transforms as Tr
 
 
 def build_transforms(cfg, is_train=True):
@@ -44,3 +45,39 @@ def build_transforms(cfg, is_train=True):
         ]
     )
     return transform
+
+
+class Contrastive_transforms:
+    
+    def __init__(self, cfg):
+        self.min_size = cfg.INPUT.MIN_SIZE_TRAIN
+        self.max_size = cfg.INPUT.MAX_SIZE_TRAIN
+        self.flip_vertical_prob = cfg.INPUT.VERTICAL_FLIP_PROB_TRAIN
+        self.brightness = cfg.INPUT.BRIGHTNESS
+        self.contrast = cfg.INPUT.CONTRAST
+        self.saturation = cfg.INPUT.SATURATION
+        self.hue = cfg.INPUT.HUE
+
+        self.to_bgr255 = cfg.INPUT.TO_BGR255
+        self.normalize_transform = Tr.Normalize(
+            mean=cfg.MODEL.CONTRASTIVE.PIXEL_MEAN, std=cfg.MODEL.CONTRASTIVE.PIXEL_STD
+        )
+        self.color_jitter = Tr.ColorJitter(
+            brightness=self.brightness,
+            contrast=self.contrast,
+            saturation=self.saturation,
+            hue=self.hue,
+        )
+
+        self.transform = Tr.Compose(
+            [
+                self.color_jitter,
+                T.Resize(self.min_size, self.max_size), #Tr.Resize((self.min_size, self.max_size)),
+                #Tr.RandomVerticalFlip(self.flip_vertical_prob),
+                Tr.ToTensor(),
+                #self.normalize_transform,
+            ]
+        )
+        
+    def __call__(self, img):
+        return self.transform(img)

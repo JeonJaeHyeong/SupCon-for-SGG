@@ -144,8 +144,11 @@ class ResNet(nn.Module):
 
     def forward(self, x):
         outputs = []
-        x = self.stem(x)
-        for stage_name in self.stages:
+        x = self.stem(x)    # x : torch.Size([6, 3, 928, 608])
+        # layer1 x : torch.Size([6, 64, 232, 152])
+        # layer2 x : torch.Size([6, 512, 116, 76])
+        # layer3 x : torch.Size([6, 1024, 58, 38])
+        for stage_name in self.stages:  # self.stages : ['layer1', 'layer2', 'layer3', 'layer4']
             x = getattr(self, stage_name)(x)
             if self.return_features[stage_name]:
                 outputs.append(x)

@@ -39,6 +39,145 @@ from .rel_proposal_network.loss import (
     RelAwareLoss,
 )
 from .utils_relation import layer_init, get_box_info, get_box_pair_info, obj_prediction_nms
+from pysgg.modeling.roi_heads.relation_head.model_contrastive import ContextEncoder, Projection, Predictor
+
+
+@registry.ROI_RELATION_PREDICTOR.register("ContrastivePredictor")
+class ContrastivePredictor(nn.Module):
+    def __init__(self, cfg, in_channels):
+        super(ContrastivePredictor, self).__init__()
+        self.num_obj_cls = cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES
+        self.num_rel_cls = cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.use_bias = cfg.MODEL.ROI_RELATION_HEAD.FREQUENCY_BAIS
+
+        # mode
+        if cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
+            if cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+                self.mode = "predcls"
+            else:
+                self.mode = "sgcls"
+        else:
+            self.mode = "sgdet"
+
+        assert in_channels is not None
+
+        self.use_obj_recls_logits = cfg.MODEL.ROI_RELATION_HEAD.REL_OBJ_MULTI_TASK_LOSS
+        self.obj_recls_logits_update_manner = (
+            cfg.MODEL.ROI_RELATION_HEAD.OBJECT_CLASSIFICATION_MANNER
+        )
+        assert self.obj_recls_logits_update_manner in ["replace", "add"]
+
+        self.pooling_dim = cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM #cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM        
+        self.sub_emb = make_fc(self.pooling_dim, 512)
+        self.obj_emb = make_fc(self.pooling_dim, 512)
+
+        self.context_encoder = ContextEncoder(512 * 2, 512, 512*2)
+        self.projector= Projection(512, 256, 512)
+
+        self.obj_predictor = Predictor(512, 151, 256)
+        self.rel_predictor = Predictor(512, 51, 256)
+        
+        statistics = get_dataset_statistics(cfg)
+        obj_classes, rel_classes = statistics["obj_classes"], statistics["rel_classes"]
+        assert self.num_obj_cls == len(obj_classes)
+        assert self.num_rel_cls == len(rel_classes)
+        
+        #self.init_classifier_weight()
+   
+
+    def forward(
+        self,
+        proposals,
+        rel_pair_idxs,
+        rel_labels,
+        rel_binarys,
+        roi_features,
+        union_features,
+        augmented_roi_features=None,
+        logger=None,
+    ):
+        
+        sub_feat = self.sub_emb(roi_features)
+        obj_feat = self.obj_emb(roi_features)
+        roi_pred_logit = ()
+
+
+        if self.mode == "predcls":
+            obj_labels = cat(
+                [proposal.get_field("labels") for proposal in proposals], dim=0
+            )
+            refined_obj_logits = to_onehot(obj_labels, self.num_obj_cls)
+        else:
+            sub_feat = self.sub_emb(roi_features)
+            obj_feat = self.obj_emb(roi_features)
+            roi_pred_logit = ()
+
+            batch_index = 0
+            refined_obj_logits = self.obj_predictor((sub_feat + obj_feat) / 2)
+
+
+        # box의 예측 값
+        num_objs = [len(b) for b in proposals]
+        num_rels = [r.shape[0] for r in rel_pair_idxs]
+        assert len(num_rels) == len(num_objs)
+        obj_pred_logits = cat(
+            [each_prop.get_field("predict_logits") for each_prop in proposals], dim=0
+        )   # torch.Size([480, 151])
+
+
+        # using the object results, update the pred label and logits
+        if self.use_obj_recls_logits:
+            if self.mode == "sgdet":
+                boxes_per_cls = cat(
+                    [proposal.get_field("boxes_per_cls") for proposal in proposals], dim=0
+                )  # comes from post process of box_head
+                # here we use the logits refinements by adding
+                if self.obj_recls_logits_update_manner == "add":
+                    obj_pred_logits = refined_obj_logits + obj_pred_logits
+                if self.obj_recls_logits_update_manner == "replace":
+                    obj_pred_logits = refined_obj_logits
+                refined_obj_pred_labels = obj_prediction_nms(
+                    boxes_per_cls, obj_pred_logits, nms_thresh=0.5
+                )
+                obj_pred_labels = refined_obj_pred_labels
+            else:
+                _, obj_pred_labels = refined_obj_logits[:, 1:].max(-1)
+        else:
+            obj_pred_labels = cat(
+                [each_prop.get_field("pred_labels") for each_prop in proposals], dim=0
+            ) # torch.Size([480])
+
+
+        obj_pred_logits = obj_pred_logits.split(num_objs, dim=0) # 똑같은데 그냥 image 별로 분리, obj_pred_logits[0].shape torch.Size([80, 151])
+        
+        
+        rel_cls_logits = []
+        
+        batch_index = 0
+        for i in range(len(rel_pair_idxs)):
+            sub_idxs = rel_pair_idxs[i][:, 0].contiguous().long().view(-1)
+            obj_idxs = rel_pair_idxs[i][:, 1].contiguous().long().view(-1)
+            
+            roi_features_batch = roi_features[batch_index:batch_index+len(proposals[i])]
+            
+            sub_roi_features = roi_features_batch[sub_idxs]
+            obj_roi_features = roi_features_batch[obj_idxs]
+            
+            sub_emb = self.sub_emb(sub_roi_features)
+            obj_emb = self.obj_emb(obj_roi_features)
+            
+            rel_emb = self.context_encoder(torch.cat([sub_emb, obj_emb], dim=1))
+            #proj_rel = self.projector(rel_emb)
+            pred_rel = self.rel_predictor(rel_emb)
+            
+            rel_cls_logits.append(pred_rel)
+            batch_index += len(proposals[i])
+        rel_cls_logits = tuple(rel_cls_logits)
+
+        add_losses = {}
+        
+
+        return obj_pred_logits, rel_cls_logits, add_losses
 
 
 @registry.ROI_RELATION_PREDICTOR.register("TransformerPredictor")
@@ -196,6 +335,25 @@ class IMPPredictor(nn.Module):
         assert in_channels is not None
         self.pooling_dim = cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
 
+        self.use_contrastive_info = cfg.MODEL.CONTRASTIVE.FINETUNING
+        if self.use_contrastive_info:
+            self.head_dim = cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM #cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM        
+            self.sub_emb = make_fc(self.head_dim, 512)
+            self.obj_emb = make_fc(self.head_dim, 512)
+
+            self.context_encoder = ContextEncoder(512 * 2, 512, 512*2)
+            self.projector= Projection(512, 256, 512)
+            
+            for _, param in self.projector.named_parameters():
+                param.requires_grad = False
+            for _, param in self.context_encoder.named_parameters():
+                param.requires_grad = False
+            for _, param in self.sub_emb.named_parameters():
+                param.requires_grad = False
+            for _, param in self.obj_emb.named_parameters():
+                param.requires_grad = False
+
+
         self.context_layer = IMPContext(
             config,
             in_channels,
@@ -206,8 +364,13 @@ class IMPPredictor(nn.Module):
         # post decoding
         self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
 
-        self.rel_classifier = build_classifier(self.hidden_dim, self.num_rel_cls)
-        self.obj_classifier = build_classifier(self.hidden_dim, self.num_obj_cls)
+
+        if self.use_contrastive_info:
+            self.rel_classifier = build_classifier(self.hidden_dim+512, self.num_rel_cls)
+            self.obj_classifier = build_classifier(self.hidden_dim+512, self.num_obj_cls)
+        else:
+            self.rel_classifier = build_classifier(self.hidden_dim, self.num_rel_cls)
+            self.obj_classifier = build_classifier(self.hidden_dim, self.num_obj_cls)
 
         self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
 
@@ -256,9 +419,42 @@ class IMPPredictor(nn.Module):
             roi_features, proposals, union_features, rel_pair_idxs, logger
         )
 
+        if self.use_contrastive_info:
+            s_feat = self.sub_emb(roi_features)
+            o_feat = self.obj_emb(roi_features)
+            
+            contrastive_obj_feats = torch.div(s_feat + o_feat, 2)
+            
+            contrastive_rel_feats = []
+            
+            batch_index = 0
+            for i in range(len(rel_pair_idxs)):
+                sub_idxs = rel_pair_idxs[i][:, 0].contiguous().long().view(-1)
+                obj_idxs = rel_pair_idxs[i][:, 1].contiguous().long().view(-1)
+                
+                roi_features_batch = roi_features[batch_index:batch_index+len(proposals[i])]
+                
+                sub_roi_features = roi_features_batch[sub_idxs]
+                obj_roi_features = roi_features_batch[obj_idxs]
+                
+                sub_emb = self.sub_emb(sub_roi_features)
+                obj_emb = self.obj_emb(obj_roi_features)
+                
+                rel_emb = self.context_encoder(torch.cat([sub_emb, obj_emb], dim=1))
+                #proj_rel = self.projector(rel_emb)
+                #pred_rel = self.rel_predictor(rel_emb)
+                
+                contrastive_rel_feats.append(rel_emb)
+                batch_index += len(proposals[i])
+            contrastive_rel_feats = torch.cat(contrastive_rel_feats, dim = 0)
+            
+        obj_feats = torch.cat([obj_feats, contrastive_obj_feats], dim=1)
+        rel_feats = torch.cat([rel_feats, contrastive_rel_feats], dim=1)
+
+
         if self.mode == "predcls":
             obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
-            obj_dists = to_onehot(obj_labels, self.num_obj)
+            obj_dists = to_onehot(obj_labels, self.num_obj_cls)
         else:
             obj_dists = self.obj_classifier(obj_feats)
 
@@ -487,9 +683,9 @@ class MSDNPredictor(nn.Module):
 class BGNNPredictor(nn.Module):
     def __init__(self, config, in_channels):
         super(BGNNPredictor, self).__init__()
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
-        self.use_bias = config.MODEL.ROI_RELATION_HEAD.FREQUENCY_BAIS
+        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES # 151
+        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES # 51
+        self.use_bias = config.MODEL.ROI_RELATION_HEAD.FREQUENCY_BAIS # True
 
         # mode
         if cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
@@ -501,9 +697,27 @@ class BGNNPredictor(nn.Module):
             self.mode = "sgdet"
 
         assert in_channels is not None
-        self.pooling_dim = cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
-        self.input_dim = in_channels
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.GRAPH_HIDDEN_DIM
+        self.pooling_dim = cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM # 2048
+        self.input_dim = in_channels # 4096
+        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.GRAPH_HIDDEN_DIM # 512
+
+        self.use_contrastive_info = cfg.MODEL.CONTRASTIVE.FINETUNING
+        if self.use_contrastive_info:
+            self.head_dim = cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM #cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM        
+            self.sub_emb = make_fc(self.head_dim, 512)
+            self.obj_emb = make_fc(self.head_dim, 512)
+
+            self.context_encoder = ContextEncoder(512 * 2, 512, 512*2)
+            self.projector= Projection(512, 256, 512)
+            
+            for _, param in self.projector.named_parameters():
+                param.requires_grad = False
+            for _, param in self.context_encoder.named_parameters():
+                param.requires_grad = False
+            for _, param in self.sub_emb.named_parameters():
+                param.requires_grad = False
+            for _, param in self.obj_emb.named_parameters():
+                param.requires_grad = False
 
         self.split_context_model4inst_rel = (
             config.MODEL.ROI_RELATION_HEAD.BGNN_MODULE.SPLIT_GRAPH4OBJ_REL
@@ -538,8 +752,12 @@ class BGNNPredictor(nn.Module):
         assert self.obj_recls_logits_update_manner in ["replace", "add"]
 
         # post classification
-        self.rel_classifier = build_classifier(self.hidden_dim, self.num_rel_cls)
-        self.obj_classifier = build_classifier(self.hidden_dim, self.num_obj_cls)
+        if self.use_contrastive_info:
+            self.rel_classifier = build_classifier(self.hidden_dim+512, self.num_rel_cls)
+            self.obj_classifier = build_classifier(self.hidden_dim+512, self.num_obj_cls)
+        else:
+            self.rel_classifier = build_classifier(self.hidden_dim, self.num_rel_cls)
+            self.obj_classifier = build_classifier(self.hidden_dim, self.num_obj_cls)
 
         self.rel_aware_model_on = config.MODEL.ROI_RELATION_HEAD.RELATION_PROPOSAL_MODEL.SET_ON
 
@@ -573,12 +791,12 @@ class BGNNPredictor(nn.Module):
 
     def forward(
         self,
-        inst_proposals,
-        rel_pair_idxs,
-        rel_labels,
-        rel_binarys,
-        roi_features,
-        union_features,
+        inst_proposals, # [BoxList(num_boxes=80...mode=xyxy), BoxList(num_boxes=80...mode=xyxy), ...], len(6)
+        rel_pair_idxs,  # [tensor([[18, 14], ...='cuda:0'), ... ], len(6), rel_pair_idxs[0].shape : [156, 2]
+        rel_labels,     # [tensor([31,  0,  0, ...='cuda:0'), tensor([20, 20, 31, ...='cuda:0'), ... ] len(6), rel_labels[0].shape : [156]
+        rel_binarys,    # [tensor([[0., 0., 0.,...='cuda:0'), tensor([[0., 0., 0.,...='cuda:0'), ... ] len(6), rel_binarys[0].shape : [80, 80]
+        roi_features,   # roi_featuers.shape : [480, 4096] = [instance_num, pooling_dim]
+        union_features, # union_features.shape : [1101, 4096] = [relation_num, pooling_dim]
         logger=None,
     ):
         """
@@ -603,6 +821,42 @@ class BGNNPredictor(nn.Module):
         obj_feats, rel_feats, pre_cls_logits, relatedness = self.context_layer(
             roi_features, union_features, inst_proposals, rel_pair_idxs, rel_binarys, logger
         )
+        # obj_feats.shape : [480, 512]
+        # rel_feats.shape : [1101, 512]
+        # len(pre_cls_logits) : 3, pre_cls_logits[0].shape : [1101, 51]
+        # relateness : None
+        if self.use_contrastive_info:
+            s_feat = self.sub_emb(roi_features)
+            o_feat = self.obj_emb(roi_features)
+            
+            contrastive_obj_feats = torch.div(s_feat + o_feat, 2)
+            
+            contrastive_rel_feats = []
+            
+            batch_index = 0
+            for i in range(len(rel_pair_idxs)):
+                sub_idxs = rel_pair_idxs[i][:, 0].contiguous().long().view(-1)
+                obj_idxs = rel_pair_idxs[i][:, 1].contiguous().long().view(-1)
+                
+                roi_features_batch = roi_features[batch_index:batch_index+len(inst_proposals[i])]
+                
+                sub_roi_features = roi_features_batch[sub_idxs]
+                obj_roi_features = roi_features_batch[obj_idxs]
+                
+                sub_emb = self.sub_emb(sub_roi_features)
+                obj_emb = self.obj_emb(obj_roi_features)
+                
+                rel_emb = self.context_encoder(torch.cat([sub_emb, obj_emb], dim=1))
+                #proj_rel = self.projector(rel_emb)
+                #pred_rel = self.rel_predictor(rel_emb)
+                
+                contrastive_rel_feats.append(rel_emb)
+                batch_index += len(inst_proposals[i])
+            contrastive_rel_feats = torch.cat(contrastive_rel_feats, dim = 0)
+            
+        obj_feats = torch.cat([obj_feats, contrastive_obj_feats], dim=1)
+        rel_feats = torch.cat([rel_feats, contrastive_rel_feats], dim=1)
+        
 
         if relatedness is not None:
             for idx, prop in enumerate(inst_proposals):
@@ -615,15 +869,16 @@ class BGNNPredictor(nn.Module):
             refined_obj_logits = to_onehot(obj_labels, self.num_obj_cls)
         else:
             refined_obj_logits = self.obj_classifier(obj_feats)
+        # refined_obj_logits.shape : [480, 151]
 
-        rel_cls_logits = self.rel_classifier(rel_feats)
+        rel_cls_logits = self.rel_classifier(rel_feats) # [1101, 51]
 
         num_objs = [len(b) for b in inst_proposals]
         num_rels = [r.shape[0] for r in rel_pair_idxs]
         assert len(num_rels) == len(num_objs)
         obj_pred_logits = cat(
             [each_prop.get_field("predict_logits") for each_prop in inst_proposals], dim=0
-        )
+        )   # torch.Size([480, 151])
 
         # using the object results, update the pred label and logits
         if self.use_obj_recls_logits:
@@ -645,7 +900,7 @@ class BGNNPredictor(nn.Module):
         else:
             obj_pred_labels = cat(
                 [each_prop.get_field("pred_labels") for each_prop in inst_proposals], dim=0
-            )
+            ) # torch.Size([480])
 
         if self.use_bias:
             obj_pred_labels = obj_pred_labels.split(num_objs, dim=0)
@@ -660,7 +915,7 @@ class BGNNPredictor(nn.Module):
                 + self.freq_lambda * self.freq_bias.index_with_labels(pair_pred.long())
             )
 
-        obj_pred_logits = obj_pred_logits.split(num_objs, dim=0)
+        obj_pred_logits = obj_pred_logits.split(num_objs, dim=0) # 똑같은데 그냥 image 별로 분리, obj_pred_logits[0].shape torch.Size([80, 151])
         rel_cls_logits = rel_cls_logits.split(num_rels, dim=0)
 
         add_losses = {}
@@ -999,8 +1254,32 @@ class MotifPredictor(nn.Module):
         # post decoding
         self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
         self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+
+
+        self.use_contrastive_info = cfg.MODEL.CONTRASTIVE.FINETUNING
+        if self.use_contrastive_info:
+            self.head_dim = cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM #cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM        
+            self.sub_emb = make_fc(self.head_dim, 512)
+            self.obj_emb = make_fc(self.head_dim, 512)
+
+            self.context_encoder = ContextEncoder(512 * 2, 512, 512*2)
+            self.projector= Projection(512, 256, 512)
+            
+            for _, param in self.projector.named_parameters():
+                param.requires_grad = False
+            for _, param in self.context_encoder.named_parameters():
+                param.requires_grad = False
+            for _, param in self.sub_emb.named_parameters():
+                param.requires_grad = False
+            for _, param in self.obj_emb.named_parameters():
+                param.requires_grad = False
+
         self.post_emb = make_fc(self.hidden_dim, self.hidden_dim * 2)
-        self.post_cat = make_fc(self.hidden_dim * 2, self.pooling_dim)
+
+        if self.use_contrastive_info:
+            self.post_cat = make_fc(self.hidden_dim * 2 + 512, self.pooling_dim)
+        else:
+            self.post_cat = make_fc(self.hidden_dim * 2, self.pooling_dim)
         self.rel_compress = build_classifier(self.pooling_dim, self.num_rel_cls, bias=True)
 
         # initialize layer parameters
@@ -1064,20 +1343,22 @@ class MotifPredictor(nn.Module):
             obj_dists, obj_preds, edge_ctx, _ = self.context_layer(
                 roi_features, proposals, logger
             )
+        # obj_dists.shape : torch.Size([480, 151])
+        # obj_preds.shape : torch.Size([480])
 
         # post decode
-        edge_rep = self.post_emb(edge_ctx)
-        edge_rep = edge_rep.view(edge_rep.size(0), 2, self.hidden_dim)
-        head_rep = edge_rep[:, 0].contiguous().view(-1, self.hidden_dim)
-        tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
+        edge_rep = self.post_emb(edge_ctx) # torch.Size([480, 1024])
+        edge_rep = edge_rep.view(edge_rep.size(0), 2, self.hidden_dim) # torch.Size([480, 2, 512])
+        head_rep = edge_rep[:, 0].contiguous().view(-1, self.hidden_dim) # torch.Size([480, 512])
+        tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim) # torch.Size([480, 512])
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
         num_objs = [len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
-        head_reps = head_rep.split(num_objs, dim=0)
+        head_reps = head_rep.split(num_objs, dim=0) # len(6), head_reps[0].shape : torch.Size([80, 512])
         tail_reps = tail_rep.split(num_objs, dim=0)
-        obj_preds = obj_preds.split(num_objs, dim=0)
+        obj_preds = obj_preds.split(num_objs, dim=0) # len(6) obj_preds[0].shape : torch.Size([80])
         if not self.use_obj_recls_labels:
             obj_preds = [each.get_field("pred_labels") for each in proposals]
 
@@ -1092,8 +1373,45 @@ class MotifPredictor(nn.Module):
             pair_preds.append(
                 torch.stack((obj_pred[pair_idx[:, 0]], obj_pred[pair_idx[:, 1]]), dim=1)
             )
-        prod_rep = cat(prod_reps, dim=0)
-        pair_pred = cat(pair_preds, dim=0)
+        prod_rep = cat(prod_reps, dim=0)    # torch.Size([1814, 1024])
+        pair_pred = cat(pair_preds, dim=0)  # torch.Size([1814, 2])
+
+
+        #========================================================================
+        if self.use_contrastive_info:
+            #s_feat = self.sub_emb(roi_features)
+            #o_feat = self.obj_emb(roi_features)
+            
+            #contrastive_obj_feats = torch.div(s_feat + o_feat, 2)
+            
+            contrastive_rel_feats = []
+            
+            batch_index = 0
+            for i in range(len(rel_pair_idxs)):
+                sub_idxs = rel_pair_idxs[i][:, 0].contiguous().long().view(-1)
+                obj_idxs = rel_pair_idxs[i][:, 1].contiguous().long().view(-1)
+                
+                roi_features_batch = roi_features[batch_index:batch_index+len(proposals[i])]
+                
+                sub_roi_features = roi_features_batch[sub_idxs]
+                obj_roi_features = roi_features_batch[obj_idxs]
+                
+                sub_emb = self.sub_emb(sub_roi_features)
+                obj_emb = self.obj_emb(obj_roi_features)
+                
+                rel_emb = self.context_encoder(torch.cat([sub_emb, obj_emb], dim=1))
+                #proj_rel = self.projector(rel_emb)
+                #pred_rel = self.rel_predictor(rel_emb)
+                
+                contrastive_rel_feats.append(rel_emb)
+                batch_index += len(proposals[i])
+            contrastive_rel_feats = torch.cat(contrastive_rel_feats, dim = 0)
+            
+        #obj_feats = torch.cat([obj_feats, contrastive_obj_feats], dim=1)
+        prod_rep = torch.cat([prod_rep, contrastive_rel_feats], dim=1)
+        #========================================================================
+
+
 
         prod_rep = self.post_cat(prod_rep)
 
@@ -1154,11 +1472,38 @@ class VCTreePredictor(nn.Module):
             config, obj_classes, rel_classes, statistics, in_channels
         )
 
+
+        self.use_contrastive_info = cfg.MODEL.CONTRASTIVE.FINETUNING
+        if self.use_contrastive_info:
+            self.head_dim = cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM #cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM        
+            self.sub_emb = make_fc(self.head_dim, 512)
+            self.obj_emb = make_fc(self.head_dim, 512)
+
+            self.context_encoder = ContextEncoder(512 * 2, 512, 512*2)
+            self.projector= Projection(512, 256, 512)
+            
+            for _, param in self.projector.named_parameters():
+                param.requires_grad = False
+            for _, param in self.context_encoder.named_parameters():
+                param.requires_grad = False
+            for _, param in self.sub_emb.named_parameters():
+                param.requires_grad = False
+            for _, param in self.obj_emb.named_parameters():
+                param.requires_grad = False
+
+
         # post decoding
         self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
         self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
         self.post_emb = make_fc(self.hidden_dim, self.hidden_dim * 2)
-        self.post_cat = make_fc(self.hidden_dim * 2, self.pooling_dim)
+        #self.post_cat = make_fc(self.hidden_dim * 2, self.pooling_dim)
+
+        if self.use_contrastive_info:
+            self.post_cat = make_fc(self.hidden_dim * 2 + 512, self.pooling_dim)
+        else:
+            self.post_cat = make_fc(self.hidden_dim * 2, self.pooling_dim)
+
+
 
         # learned-mixin
         # self.uni_gate = nn.Linear(self.pooling_dim, self.num_rel_cls)
@@ -1233,6 +1578,43 @@ class VCTreePredictor(nn.Module):
             )
         prod_rep = cat(prod_reps, dim=0)
         pair_pred = cat(pair_preds, dim=0)
+
+
+
+        #========================================================================
+        if self.use_contrastive_info:
+            #s_feat = self.sub_emb(roi_features)
+            #o_feat = self.obj_emb(roi_features)
+            
+            #contrastive_obj_feats = torch.div(s_feat + o_feat, 2)
+            
+            contrastive_rel_feats = []
+            
+            batch_index = 0
+            for i in range(len(rel_pair_idxs)):
+                sub_idxs = rel_pair_idxs[i][:, 0].contiguous().long().view(-1)
+                obj_idxs = rel_pair_idxs[i][:, 1].contiguous().long().view(-1)
+                
+                roi_features_batch = roi_features[batch_index:batch_index+len(proposals[i])]
+                
+                sub_roi_features = roi_features_batch[sub_idxs]
+                obj_roi_features = roi_features_batch[obj_idxs]
+                
+                sub_emb = self.sub_emb(sub_roi_features)
+                obj_emb = self.obj_emb(obj_roi_features)
+                
+                rel_emb = self.context_encoder(torch.cat([sub_emb, obj_emb], dim=1))
+                #proj_rel = self.projector(rel_emb)
+                #pred_rel = self.rel_predictor(rel_emb)
+                
+                contrastive_rel_feats.append(rel_emb)
+                batch_index += len(proposals[i])
+            contrastive_rel_feats = torch.cat(contrastive_rel_feats, dim = 0)
+            
+        #obj_feats = torch.cat([obj_feats, contrastive_obj_feats], dim=1)
+        prod_rep = torch.cat([prod_rep, contrastive_rel_feats], dim=1)
+        #========================================================================
+
 
         prod_rep = self.post_cat(prod_rep)
 
