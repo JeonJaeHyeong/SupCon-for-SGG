@@ -1,10 +1,5 @@
-# A Toolkit for Scene Graph Benchmark in Pytorch(PySGG)
+# Supervised Contrastive Learning for Scene Graph Generation
 
-[![LICENSE](https://img.shields.io/badge/license-MIT-green)](https://github.com/KaihuaTang/Scene-Graph-Benchmark.pytorch/blob/master/LICENSE)
-[![Python](https://img.shields.io/badge/python-3.7-blue.svg)](https://www.python.org/)
-![PyTorch](https://img.shields.io/badge/pytorch-1.4.0-%237732a8)
-
-Our paper [Bipartite Graph Network with Adaptive Message Passing for Unbiased Scene Graph Generation](https://arxiv.org/abs/2104.00308) has been accepted by CVPR 2021.
 
 ## Installation
 
@@ -13,11 +8,6 @@ Check [INSTALL.md](INSTALL.md) for installation instructions.
 ## Dataset
 
 Check [DATASET.md](DATASET.md) for instructions of dataset preprocessing.
-
-## Model Zoo 
-BGNN performance:
-
-The methods implemented in our toolkit and reported results are given in [Model Zoo.md](MODELZOO.md)
 
 ## Training **(IMPORTANT)**
 
@@ -36,47 +26,25 @@ mv /path/vg_faster_det.pth checkpoints/detection/pretrained_faster_rcnn/
 Then, you need to modify the pretrained weight parameter `MODEL.PRETRAINED_DETECTOR_CKPT` in configs yaml `configs/e2e_relBGNN_vg-oiv6-oiv4.yaml` to the path of corresponding pretrained rcnn weight to make sure you load the detection weight parameter correctly.
 
 
+### Contrastive Learning
+To apply contrastive learning representation to SGG models, you should train contrastive model.
+We provide script for self supervised learning( in `script/contrastive_rel_train_self.sh`)
+You don't need any other processed data. Just run that script then VGContrastive dataset automatically generate positive, negative samples and train contrastive model.
 
-### Scene Graph Generation Model
-You can follow the following instructions to train your own, which takes 4 GPUs for train each SGG model. The results should be very close to the reported results given in paper.
+The result is saved in `checkpoint/contrastive_learning`
+There is two main option about contrastive learning(MODEL.CONTRASTIVE.USE_CLUSTER or USE_OBJECT_INFO)
+USE_CLUSTER mean using cluster information and USE_OBJECT_INFO mean get positive samples based on object label or predicate label. The experiment result in our paper is using predicate label.
 
-We provide the one-click script for training our BGNN model( in `scripts/rel_train_BGNN_[vg/oiv6/oiv4].sh`)
-or you can copy the following command to train
-```
-gpu_num=4 && python -m torch.distributed.launch --master_port 10028 --nproc_per_node=$gpu_num \
-       tools/relation_train_net.py \
-       --config-file "configs/e2e_relBGNN_vg.yaml" \
-        DEBUG False \
-        EXPERIMENT_NAME "BGNN-3-3" \
-        SOLVER.IMS_PER_BATCH $[3*$gpu_num] \
-        TEST.IMS_PER_BATCH $[$gpu_num] \
-        SOLVER.VAL_PERIOD 3000 \
-        SOLVER.CHECKPOINT_PERIOD 3000 
-
-```
-We also provide the trained model pth of [BGNN(vg)](https://shanghaitecheducn-my.sharepoint.com/:u:/g/personal/lirj2_shanghaitech_edu_cn/Ee4PdxluTphEicUDckJIfmEBisAyUgkjeuerN_rjrG1CIw?e=pgr8a5),[BGNN(oiv6)](https://shanghaitecheducn-my.sharepoint.com/:u:/g/personal/lirj2_shanghaitech_edu_cn/EdKOrWAOf4hMiDWbR3CgYrMB9w7ZwWul-Wc6IUSbs51Idw?e=oEEHIQ)
-
+### Apply pretrained contrastive model to baseline model
+After contrastive learning, then you run script(`script/contrastive_rel_train_vg_predcls.sh`)
+In that script, you should change the directory of contrastive model path.
+Then everything is done!
 
 
 ## Test
 Similarly, we also provide the `rel_test.sh` for directly produce the results from the checkpoint provide by us.
 By replacing the parameter of `MODEL.WEIGHT` to the trained model weight and selected dataset name in `DATASETS.TEST`, you can directly eval the model on validation or test set.
 
-
-## Citations
-
-If you find this project helps your research, please kindly consider citing our papers in your publications.
-
-```
-@InProceedings{Li_2021_CVPR,
-    author    = {Li, Rongjie and Zhang, Songyang and Wan, Bo and He, Xuming},
-    title     = {Bipartite Graph Network With Adaptive Message Passing for Unbiased Scene Graph Generation},
-    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-    month     = {June},
-    year      = {2021},
-    pages     = {11109-11119}
-}
-```
 
 
 ## Acknowledgment
